@@ -33,6 +33,18 @@
 FlexEvent is an event-camera object detection framework designed to operate
 across arbitrary frequencies. We leverage the rich temporal information of event data and the semantic detail of RGB frames to overcome the limitations of existing methods, providing a flexible solution for dynamic environments.
 
+<video id="video2" autoplay muted loop playsinline style="max-width: 100%; height: auto; width: 1000px;">
+    <source src="docs/webpage2.mp4" type="video/mp4">
+    Your browser does not support the video tag.
+</video>
+<div style="display: flex; justify-content: space-between; width: 1000px; margin-bottom: 10px; text-align: center; font-weight: bold; font-size: 15px;">
+    <div style="flex: 1; text-align: center;">Ground Truth</div>
+    <div style="flex: 1; text-align: center;">FlexEvent@180Hz</div>
+    <div style="flex: 1; text-align: center;">FlexEvent@90Hz</div>
+    <div style="flex: 1; text-align: center;">FlexEvent@60Hz</div>
+    <div style="flex: 1; text-align: center;">FlexEvent@20Hz</div>
+</div>
+
 
 
 ## Updates
