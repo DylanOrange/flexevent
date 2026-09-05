@@ -1,0 +1,19 @@
+defaults:
+  - dataset: ???
+  - model: rnndet
+  - _self_
+
+checkpoint: ???
+precision: 16
+
+hardware:
+  gpus: 0
+
+visualization:
+  sequence: null
+  output: visualization.mp4
+  start_frame: 0
+  frame_stride: 1
+  max_frames: 200
+  fps: 20
+  confidence_threshold: 0.3

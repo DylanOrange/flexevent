@@ -1,0 +1,22 @@
+name: dsec
+path: ???
+class_mode: 2class
+
+ev_repr_name: stacked_histogram_dt=50_nbins=10
+sequence_length: 11
+resolution_hw: [215, 320]
+downsample_by_factor_2: false
+only_load_end_labels: false
+min_bbox_diag: 20
+min_bbox_height: 10
+num_us: -1
+
+eval:
+  sampling: stream
+
+flexfuse:
+  dual_frequency:
+    enable: true
+    high_window_ratio: 0.5
+    inference_crop: deterministic_random
+    inference_seed: 42

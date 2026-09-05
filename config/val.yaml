@@ -1,0 +1,20 @@
+defaults:
+  - dataset: ???
+  - model: rnndet
+  - _self_
+
+checkpoint: ???
+use_test_set: true
+precision: 16
+
+hardware:
+  gpus: 0
+  num_workers:
+    eval: 4
+
+batch_size:
+  eval: 1
+
+validation:
+  interframe: false
+  limit_test_batches: 1.0

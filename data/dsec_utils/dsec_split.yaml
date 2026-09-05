@@ -1,0 +1,21 @@
+val:
+  - zurich_city_16_a
+  - zurich_city_17_a
+  - zurich_city_18_a
+  - zurich_city_19_a
+  - zurich_city_20_a
+  - zurich_city_21_a
+test:
+  - thun_01_a
+  - thun_01_b
+  - thun_02_a
+  - interlaken_00_a
+  - interlaken_00_b
+  - interlaken_01_a
+  - zurich_city_12_a
+  - zurich_city_13_a
+  - zurich_city_13_b
+  - zurich_city_14_a
+  - zurich_city_14_b
+  - zurich_city_14_c
+  - zurich_city_15_a
