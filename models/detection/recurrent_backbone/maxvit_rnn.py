@@ -11,7 +11,7 @@ try:
 except ImportError:
     th_compile = None
 
-from data.utils.types import FeatureMap, BackboneFeatures, LstmState, LstmStates
+from data.utils.types import FeatureMap, LstmState, LstmStates
 from models.layers.rnn import DWSConvLSTM2d
 from models.layers.maxvit.maxvit import (
     PartitionAttentionCl,
@@ -19,7 +19,7 @@ from models.layers.maxvit.maxvit import (
     get_downsample_layer_Cf2Cl,
     PartitionType)
 
-from models.layers.maxvit.moe_inference import MoEConv
+from models.layers.maxvit.moe import MoEConv
 from .base import BaseDetector
 
 
@@ -30,12 +30,6 @@ class RNNDetector(BaseDetector):
         ###### Config ######
         in_channels = mdl_config.input_channels#20
         embed_dim = mdl_config.embed_dim#64
-        self.use_image_branch = bool(mdl_config.get('use_image_branch', True))
-        self.dual_frequency_fusion = str(
-            mdl_config.get('dual_frequency_fusion', 'mean')
-        )
-        assert self.dual_frequency_fusion in {'sum', 'mean'}, \
-            self.dual_frequency_fusion
         dim_multiplier_per_stage = tuple(mdl_config.dim_multiplier)
         num_blocks_per_stage = tuple(mdl_config.num_blocks)#[1, 1, 1, 1]
         T_max_chrono_init_per_stage = tuple(mdl_config.T_max_chrono_init)#[4, 8, 16, 32]
@@ -60,32 +54,18 @@ class RNNDetector(BaseDetector):
                 print('Could not compile backbone because torch.compile is not available')
         ##################################
 
-        if self.use_image_branch:
-            # Image backbone for Event+RGB FlexFuse.
-            self.image_input_format = str(
-                rgb_config.get('input_format', 'legacy_bgr'))
-            assert self.image_input_format in {'legacy_bgr', 'rgb'}, \
-                f'Unsupported image input format: {self.image_input_format}'
-            self.image_backbone = build_backbone(rgb_config)
-            assert not rgb_config.get('load_pretrained_weights', False)
-            self.in_features = rgb_config.MODEL.ROI_HEADS.IN_FEATURES
-            self.size_divisibility = self.image_backbone.size_divisibility
-
-            pixel_mean = th.Tensor(rgb_config.MODEL.PIXEL_MEAN).view(3, 1, 1)
-            pixel_std = th.Tensor(rgb_config.MODEL.PIXEL_STD).view(3, 1, 1)
-            self.normalizer = lambda x: (x - pixel_mean.to(x.device)) / pixel_std.to(x.device)
-
-        else:
-            self.image_backbone = None
-            self.in_features = ()
-            self.size_divisibility = 1
+        self.image_backbone = build_backbone(rgb_config)
+        self.in_features = rgb_config.MODEL.ROI_HEADS.IN_FEATURES
+        self.size_divisibility = self.image_backbone.size_divisibility
+        pixel_mean = th.Tensor(rgb_config.MODEL.PIXEL_MEAN).view(3, 1, 1)
+        pixel_std = th.Tensor(rgb_config.MODEL.PIXEL_STD).view(3, 1, 1)
+        self.normalizer = lambda x: (x - pixel_mean.to(x.device)) / pixel_std.to(x.device)
 
         input_dim = in_channels
         patch_size = mdl_config.stem.patch_size#4
         stride = 1
         self.stage_dims = [embed_dim * x for x in dim_multiplier_per_stage]#64,128,256,512
-        
-        image_fusion = [self.use_image_branch] * num_stages
+
         self.stages = nn.ModuleList()
         self.strides = []
         for stage_idx, (num_blocks, T_max_chrono_init_stage) in \
@@ -99,8 +79,7 @@ class RNNDetector(BaseDetector):
                                      num_blocks=num_blocks,
                                      enable_token_masking=enable_masking_in_stage,
                                      T_max_chrono_init=T_max_chrono_init_stage,
-                                     stage_cfg=mdl_config.stage,
-                                     image_fusion = image_fusion[stage_idx])
+                                     stage_cfg=mdl_config.stage)
             stride = stride * spatial_downsample_factor
             self.strides.append(stride)
 
@@ -130,102 +109,42 @@ class RNNDetector(BaseDetector):
         """
         Normalize, pad and batch the input images.
         """
-        if self.image_input_format == 'rgb':
-            batched_inputs = [x[[2, 1, 0], ...] for x in batched_inputs]
+        # Images are loaded in BGR order.
+        batched_inputs = [x[[2, 1, 0], ...] for x in batched_inputs]
         images = [self.normalizer(x) for x in batched_inputs]
         images = ImageList.from_tensors(images, self.size_divisibility)# image tensor 2,3,224,320
 
         return images
     
-    def forward(self, x: th.Tensor, image: th.Tensor, prev_states: Optional[LstmStates] = None,
+    def forward(self, x: th.Tensor, image: th.Tensor, prev_states=None,
                 token_mask: Optional[th.Tensor] = None, x_b: Optional[th.Tensor] = None,
-                event_fpn: Optional[nn.Module] = None,
                 rvt_block: Optional[nn.ModuleList] = None,
-                rgb_backbone: Optional[nn.Module] = None) \
-            -> Tuple[BackboneFeatures, LstmStates]:
-        assert rvt_block is not None
-        dual_frequency = x_b is not None
-        pre_fusion_fpn = event_fpn is not None
-        if dual_frequency:
-            assert x.shape == x_b.shape, (x.shape, x_b.shape)
-            if prev_states is None:
-                prev_states_a, prev_states_b = None, None
-            else:
-                assert isinstance(prev_states, tuple) and len(prev_states) == 2
-                prev_states_a, prev_states_b = prev_states
-            if prev_states_a is None:
-                prev_states_a = [None] * self.num_stages
-            if prev_states_b is None:
-                prev_states_b = [None] * self.num_stages
-            assert len(prev_states_a) == len(prev_states_b) == self.num_stages
-            states_a: LstmStates = list()
-            states_b: LstmStates = list()
-        else:
-            if prev_states is None:
-                prev_states = [None] * self.num_stages
-            assert len(prev_states) == self.num_stages
-            states: LstmStates = list()
+                rgb_backbone: Optional[nn.Module] = None):
+        assert rvt_block is not None and rgb_backbone is not None
+        assert x_b is not None and x.shape == x_b.shape, (x.shape, getattr(x_b, 'shape', None))
+        prev_states_a, prev_states_b = prev_states if prev_states is not None else (None, None)
+        prev_states_a = prev_states_a or [None] * self.num_stages
+        prev_states_b = prev_states_b or [None] * self.num_stages
+        states_a: LstmStates = list()
+        states_b: LstmStates = list()
+
+        images = self.preprocess_image(image)
+        src = rgb_backbone(images.tensor)
+        features = [src[f] for f in self.in_features]
 
         output: Dict[int, FeatureMap] = {}
-        event_output_a: Dict[int, FeatureMap] = {}
-        event_output_b: Dict[int, FeatureMap] = {}
-        if self.use_image_branch:
-            # Process image and extract FPN features.
-            images = self.preprocess_image(image)
-            assert rgb_backbone is not None
-            src = rgb_backbone(images.tensor)
-            features = [src[f] for f in self.in_features]
-        else:
-            features = [None] * self.num_stages
-
+        loss_output = {}
         for stage_idx, stage in enumerate(rvt_block):
             stage_token_mask = token_mask if stage_idx == 0 else None
-            fuse_in_stage = not pre_fusion_fpn or stage_idx == 0
-            if dual_frequency:
-                (x, moe_x_a), state_a = stage(
-                    x, prev_states_a[stage_idx], stage_token_mask,
-                    features[stage_idx], fuse_image=fuse_in_stage)
-                (x_b, moe_x_b), state_b = stage(
-                    x_b, prev_states_b[stage_idx], stage_token_mask,
-                    features[stage_idx], fuse_image=fuse_in_stage)
-                states_a.append(state_a)
-                states_b.append(state_b)
-                event_output_a[stage_idx + 1] = x
-                event_output_b[stage_idx + 1] = x_b
-                moe_x = moe_x_a + moe_x_b
-                if self.dual_frequency_fusion == 'mean':
-                    moe_x = moe_x / 2
-            else:
-                (x, moe_x), state = stage(
-                    x, prev_states[stage_idx], stage_token_mask,
-                    features[stage_idx], fuse_image=fuse_in_stage)
-                states.append(state)
-                event_output_a[stage_idx + 1] = x
-            stage_number = stage_idx + 1
-            output[stage_number] = moe_x
-
-        if pre_fusion_fpn:
-            fpn_stages = tuple(event_fpn.in_features)
-            assert fpn_stages == (2, 3, 4), fpn_stages
-            event_pyramid_a = event_fpn(event_output_a)
-            event_pyramid_b = event_fpn(event_output_b) if dual_frequency else None
-            assert len(event_pyramid_a) == len(fpn_stages)
-            for pyramid_idx, (stage_number, event_feature_a) in enumerate(
-                    zip(fpn_stages, event_pyramid_a)):
-                stage = rvt_block[stage_number - 1]
-                rgb_feature = features[stage_number - 1]
-                fused_a = stage.fuse_features(
-                    event_feature_a, rgb_feature)
-                if dual_frequency:
-                    fused_b = stage.fuse_features(
-                        event_pyramid_b[pyramid_idx], rgb_feature)
-                    fused = fused_a + fused_b
-                    if self.dual_frequency_fusion == 'mean':
-                        fused = fused / 2
-                else:
-                    fused = fused_a
-                output[stage_number] = fused
-        return output, (states_a, states_b) if dual_frequency else states
+            (x, moe_x_a, moe_loss_a), state_a = stage(
+                x, prev_states_a[stage_idx], stage_token_mask, features[stage_idx])
+            (x_b, moe_x_b, moe_loss_b), state_b = stage(
+                x_b, prev_states_b[stage_idx], stage_token_mask, features[stage_idx])
+            states_a.append(state_a)
+            states_b.append(state_b)
+            output[stage_idx + 1] = (moe_x_a + moe_x_b) / 2
+            loss_output[stage_idx + 1] = (moe_loss_a + moe_loss_b) / 2
+        return output, loss_output, (states_a, states_b)
 
 
 class MaxVitAttentionPairCl(nn.Module):
@@ -261,14 +180,12 @@ class RNNDetectorStage(nn.Module):
                  num_blocks: int,
                  enable_token_masking: bool,
                  T_max_chrono_init: Optional[int],
-                 stage_cfg: DictConfig,
-                 image_fusion):
+                 stage_cfg: DictConfig):
         super().__init__()
         assert isinstance(num_blocks, int) and num_blocks > 0
         downsample_cfg = stage_cfg.downsample
         lstm_cfg = stage_cfg.lstm
         attention_cfg = stage_cfg.attention
-        self.image_fusion = image_fusion
         self.downsample_cf2cl = get_downsample_layer_Cf2Cl(dim_in=dim_in,
                                                            dim_out=stage_dim,
                                                            downsample_factor=spatial_downsample_factor,
@@ -289,27 +206,22 @@ class RNNDetectorStage(nn.Module):
         if self.mask_token is not None:
             th.nn.init.normal_(self.mask_token, std=.02)
         ##################################
-        if self.image_fusion:
-            self.moe_conv_layer = MoEConv(M=2, d=2*stage_dim, K=2)
-            self.embedder = nn.Conv2d(in_channels=256, out_channels=stage_dim, kernel_size=1, stride=1, padding=0)
+        self.moe_conv_layer = MoEConv(M=2, d=2*stage_dim, K=2)
+        self.embedder = nn.Conv2d(in_channels=256, out_channels=stage_dim, kernel_size=1, stride=1, padding=0)
 
     def fuse_features(self, x: th.Tensor, roi_features: th.Tensor):
-        if not self.image_fusion:
-            return x
-        assert roi_features is not None
         roi_features = self.embedder(roi_features)
         assert roi_features.shape == x.shape, (roi_features.shape, x.shape)
         shared_feature = th.cat([roi_features, x], dim=1)
-        gates = self.moe_conv_layer(shared_feature)
+        gates, moe_loss = self.moe_conv_layer(shared_feature)
         gates = gates.view(-1, 2, 1, 1, 1)
         moe_x = gates[:, 0] * roi_features + gates[:, 1] * x
-        return moe_x
+        return moe_x, moe_loss
 
     def forward(self, x: th.Tensor,
                 h_and_c_previous: Optional[LstmState] = None,
                 token_mask: Optional[th.Tensor] = None,
-                roi_features=None,
-                fuse_image: bool = True) \
+                roi_features=None) \
             -> Tuple[FeatureMap, LstmState]:
         x = self.downsample_cf2cl(x)
         if token_mask is not None:
@@ -323,8 +235,5 @@ class RNNDetectorStage(nn.Module):
         h_c_tuple = self.lstm(x, h_and_c_previous)
         x = h_c_tuple[0]
 
-        if fuse_image:
-            moe_x = self.fuse_features(x, roi_features)
-        else:
-            moe_x = x
-        return (x, moe_x), h_c_tuple
+        moe_x, moe_loss = self.fuse_features(x, roi_features)
+        return (x, moe_x, moe_loss), h_c_tuple

@@ -12,7 +12,7 @@ class DSECDet:
     """Read DSEC images and official detection labels."""
 
     def __init__(self, root: Path, split: str, sync: str = "back",
-                 split_config=None):
+                 split_config=None, pseudo_labels_root=None):
         root = Path(root)
         if split_config is None or split not in split_config:
             raise KeyError(split)
@@ -48,7 +48,9 @@ class DSECDet:
         self.directories = {}
         self.img_idx_track_idxs = {}
         for path in self.subsequence_directories:
-            directory = DSECDirectory(path)
+            pseudo_labels = None if pseudo_labels_root is None else (
+                Path(pseudo_labels_root) / f"{path.name}.npy")
+            directory = DSECDirectory(path, pseudo_labels_file=pseudo_labels)
             self.directories[path.name] = directory
             self.img_idx_track_idxs[path.name] = compute_img_idx_to_track_idx(
                 directory.tracks.tracks["t"], directory.images.timestamps
@@ -107,3 +109,10 @@ class DSECDet:
                 return index, mapping, self.directories[path.name]
             index -= sequence_len
         raise IndexError(index)
+
+    def get_pseudo_labels(self, timestamp, mask=None, directory_name=None):
+        """Pseudo-labels within 1 ms of ``timestamp``."""
+        tracks = self.directories[directory_name].tracks.pseudo_labels
+        if mask is not None:
+            tracks = tracks[mask]
+        return tracks[np.abs(timestamp - tracks["t"].astype(np.int64)) <= 1000]

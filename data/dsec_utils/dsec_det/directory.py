@@ -9,11 +9,11 @@ class BaseDirectory:
 
 
 class DSECDirectory:
-    def __init__(self, root):
+    def __init__(self, root, pseudo_labels_file=None):
         self.root = root
         self.images = ImageDirectory(root / "images")
         self.events = EventDirectory(root / "events")
-        self.tracks = TracksDirectory(root / "object_detections")
+        self.tracks = TracksDirectory(root / "object_detections", pseudo_labels_file)
 
 
 class ImageDirectory(BaseDirectory):
@@ -39,6 +39,15 @@ class EventDirectory(BaseDirectory):
 
 
 class TracksDirectory(BaseDirectory):
+    def __init__(self, root, pseudo_labels_file=None):
+        super().__init__(root)
+        self.pseudo_labels_file = pseudo_labels_file
+
+    @property
+    @lru_cache(maxsize=1)
+    def pseudo_labels(self):
+        return np.load(self.pseudo_labels_file, allow_pickle=False)
+
     @property
     @lru_cache(maxsize=1)
     def tracks(self):

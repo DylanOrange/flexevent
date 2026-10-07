@@ -43,20 +43,19 @@ class DSEC(MapDataPipe):
 
     def __init__(self, dataset, sequence_name: str, sequence_length=5,
                  min_bbox_diag=0, min_bbox_height=0, cropped_height=430,
-                 num_us=-1, dual_frequency=False, high_window_ratio=0.5,
-                 high_window_crop="trailing", high_window_seed=42,
-                 class_mode="legacy_3"):
+                 num_us=-1, high_window_ratio=0.5,
+                 high_window_crop="deterministic_random", high_window_seed=42,
+                 class_mode="2class"):
         self.dataset = dataset
         self.sequence_name = sequence_name
         self.sequence_length = int(sequence_length)
         self.num_us = float(num_us)
-        self.dual_frequency = bool(dual_frequency)
         self.high_window_ratio = float(high_window_ratio)
         self.high_window_crop = str(high_window_crop)
         self.high_window_seed = int(high_window_seed)
         if not 0 < self.high_window_ratio <= 1:
             raise ValueError("high_window_ratio must be in (0, 1]")
-        if self.high_window_crop not in {"trailing", "deterministic_random"}:
+        if self.high_window_crop not in {"deterministic_random", "random"}:
             raise ValueError(f"Unsupported high_window_crop: {self.high_window_crop}")
 
         class_spec = get_dsec_class_spec(class_mode)
@@ -175,12 +174,12 @@ class DSEC(MapDataPipe):
             int(round(duration * self.high_window_ratio)), duration
         )
         max_offset = duration - high_duration
-        if self.high_window_crop == "deterministic_random":
+        if self.high_window_crop == "random" and max_offset > 0:
+            high_start = low_start + int(np.random.randint(max_offset + 1))
+        else:
             high_start = low_start + self._high_window_offset(
                 low_start, low_end, max_offset
             )
-        else:
-            high_start = low_end - high_duration
         high_end = high_start + high_duration
         event_b = self._time_crop(event_a, high_start, high_end)
         return (
@@ -200,7 +199,7 @@ class DSEC(MapDataPipe):
             directory.events.event_file, starts, ends
         )
 
-        event_list, event_a_list, event_b_list = [], [], []
+        event_a_list, event_b_list = [], []
         window_a_list, window_b_list = [], []
         label_list, image_list = [], []
         padded, timestamps, sequences, offsets = [], [], [], []
@@ -244,16 +243,13 @@ class DSEC(MapDataPipe):
                 )
 
             label_list.append(self._to_sparse_label(detections))
-            if self.dual_frequency:
-                event_a, event_b, window_a, window_b = (
-                    self._dual_frequency_events(events, start_ts, event_end)
-                )
-                event_a_list.append(event_a)
-                event_b_list.append(event_b)
-                window_a_list.append(window_a)
-                window_b_list.append(window_b)
-            else:
-                event_list.append(self._preprocess_events(events))
+            event_a, event_b, window_a, window_b = (
+                self._dual_frequency_events(events, start_ts, event_end)
+            )
+            event_a_list.append(event_a)
+            event_b_list.append(event_b)
+            window_a_list.append(window_a)
+            window_b_list.append(window_b)
             padded.append(False)
             timestamps.append(event_end)
             sequences.append(self.sequence_name)
@@ -262,13 +258,10 @@ class DSEC(MapDataPipe):
         padding = self.sequence_length - len(label_list)
         if padding:
             padded.extend([True] * padding)
-            if self.dual_frequency:
-                event_a_list.extend([self.padding_representation] * padding)
-                event_b_list.extend([self.padding_representation] * padding)
-                window_a_list.extend([self.padding_window] * padding)
-                window_b_list.extend([self.padding_window] * padding)
-            else:
-                event_list.extend([self.padding_representation] * padding)
+            event_a_list.extend([self.padding_representation] * padding)
+            event_b_list.extend([self.padding_representation] * padding)
+            window_a_list.extend([self.padding_window] * padding)
+            window_b_list.extend([self.padding_window] * padding)
             image_list.extend([self.image_padding_representation] * padding)
             label_list.extend([None] * padding)
             timestamps.extend([-1] * padding)
@@ -283,16 +276,11 @@ class DSEC(MapDataPipe):
             DataType.TIMESTAMP: timestamps,
             DataType.SEQUENCE_NAME: sequences,
             DataType.NMS: offsets,
+            DataType.EV_REPR_A: event_a_list,
+            DataType.EV_REPR_B: event_b_list,
+            DataType.EV_WINDOW_A: window_a_list,
+            DataType.EV_WINDOW_B: window_b_list,
         }
-        if self.dual_frequency:
-            output.update({
-                DataType.EV_REPR_A: event_a_list,
-                DataType.EV_REPR_B: event_b_list,
-                DataType.EV_WINDOW_A: window_a_list,
-                DataType.EV_WINDOW_B: window_b_list,
-            })
-        else:
-            output[DataType.EV_REPR] = event_list
         return output
 
     def get_fully_padded_sample(self):
@@ -307,16 +295,9 @@ class DSEC(MapDataPipe):
             DataType.TIMESTAMP: [-1] * self.sequence_length,
             DataType.SEQUENCE_NAME: [""] * self.sequence_length,
             DataType.NMS: [-1] * self.sequence_length,
+            DataType.EV_REPR_A: events,
+            DataType.EV_REPR_B: list(events),
+            DataType.EV_WINDOW_A: [self.padding_window] * self.sequence_length,
+            DataType.EV_WINDOW_B: [self.padding_window] * self.sequence_length,
         }
-        if self.dual_frequency:
-            output.update({
-                DataType.EV_REPR_A: events,
-                DataType.EV_REPR_B: list(events),
-                DataType.EV_WINDOW_A: [self.padding_window]
-                                      * self.sequence_length,
-                DataType.EV_WINDOW_B: [self.padding_window]
-                                      * self.sequence_length,
-            })
-        else:
-            output[DataType.EV_REPR] = events
         return output

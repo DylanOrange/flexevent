@@ -2,8 +2,6 @@ name: rnndet
 
 rvt_block:
   name: MaxViTRNN
-  use_image_branch: true
-  dual_frequency_fusion: mean
   input_channels: 20
   enable_masking: false
   partition_split_32: 1
@@ -38,8 +36,6 @@ rvt_block:
       drop_cell_update: 0
 
 rgb_backbone:
-  input_format: rgb
-  load_pretrained_weights: false
   MODEL:
     PIXEL_MEAN: [123.675, 116.280, 103.530]
     PIXEL_STD: [58.395, 57.120, 57.375]
@@ -73,7 +69,6 @@ rgb_backbone:
 
 rvt_fpn:
   name: PAFPN
-  position: post_fusion
   depth: 0.67
   in_stages: [2, 3, 4]
   depthwise: false
@@ -82,7 +77,6 @@ rvt_fpn:
 yolox_head:
   name: YoloX
   num_classes: ???
-  ignore_label: null
   depthwise: false
   act: silu
 

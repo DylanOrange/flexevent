@@ -1,0 +1,11 @@
+# @package _global_
+recipe:
+  name: 2class_teacher
+dataset:
+  class_mode: 2class
+  train:
+    supervision: sparse_gt
+  eval:
+    interframe: true
+validation:
+  every_n_steps: 500

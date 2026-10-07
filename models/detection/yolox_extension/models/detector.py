@@ -19,10 +19,6 @@ class YoloXDetector(th.nn.Module):
         rgb_cfg = model_cfg.rgb_backbone
         head_cfg = model_cfg.yolox_head
 
-        self.fpn_position = str(fpn_cfg.get("position", "post_fusion"))
-        if self.fpn_position not in {"post_fusion", "pre_fusion"}:
-            raise ValueError(f"Unsupported model.rvt_fpn.position={self.fpn_position!r}")
-
         backbone_impl = build_recurrent_backbone(rvt_cfg, rgb_cfg)
         in_channels = backbone_impl.get_stage_dims(fpn_cfg.in_stages)
         strides = backbone_impl.get_strides(fpn_cfg.in_stages)
@@ -38,25 +34,20 @@ class YoloXDetector(th.nn.Module):
             image: th.Tensor,
             previous_states: Optional[LstmStates] = None,
             token_mask: Optional[th.Tensor] = None,
-            x_b: Optional[th.Tensor] = None):
+            x_b: Optional[th.Tensor] = None, return_losses: bool = False):
         with CudaTimer(device=x.device, timer_name="Backbone"):
-            event_fpn = self.rvt_fpn if self.fpn_position == "pre_fusion" else None
-            return self._backbone_impl(
+            result = self._backbone_impl(
                 x, image, previous_states, token_mask, x_b,
-                event_fpn=event_fpn,
                 rvt_block=self.rvt_block,
                 rgb_backbone=self.rgb_backbone)
+            return result if return_losses else (result[0], result[2])
 
     def forward_detect(
             self,
-            backbone_features: BackboneFeatures) -> th.Tensor:
+            backbone_features: BackboneFeatures, targets=None, **loss_options):
         device = next(iter(backbone_features.values())).device
-        if self.fpn_position == "post_fusion":
-            with CudaTimer(device=device, timer_name="FPN"):
-                features = self.rvt_fpn(backbone_features)
-        else:
-            features = tuple(
-                backbone_features[stage] for stage in self.rvt_fpn.in_features)
+        with CudaTimer(device=device, timer_name="FPN"):
+            features = self.rvt_fpn(backbone_features)
         with CudaTimer(device=device, timer_name="HEAD"):
-            outputs = self.yolox_head(features)
-        return outputs
+            outputs, losses = self.yolox_head(features, targets, **loss_options)
+        return (outputs, losses) if targets is not None else outputs

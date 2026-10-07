@@ -1,6 +1,8 @@
 from copy import deepcopy
 from typing import Any, Callable, Dict, Optional, Type, Tuple, Union
 
+import torch
+
 from data.genx_utils.collate_from_pytorch import collate, default_collate_fn_map
 from data.genx_utils.labels import ObjectLabels, SparselyBatchedObjectLabels
 
@@ -32,4 +34,13 @@ def custom_collate_streaming(batch: Any):
     return {
         'data': custom_collate(samples),
         'worker_id': worker_id,
+    }
+
+
+def custom_collate_rnd(batch: Any):
+    worker_info = torch.utils.data.get_worker_info()
+    local_worker_id = 0 if worker_info is None else worker_info.id
+    return {
+        'data': custom_collate(batch),
+        'worker_id': local_worker_id,
     }

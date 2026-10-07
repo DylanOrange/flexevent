@@ -1,0 +1,16 @@
+# @package _global_
+recipe:
+  name: 2class_balanced
+dataset:
+  class_mode: 2class
+  train:
+    supervision: pseudo
+  eval:
+    interframe: true
+training:
+  max_steps: 600
+  learning_rate: 0.00005
+  lr_scheduler:
+    total_steps: 600
+validation:
+  every_n_steps: 50

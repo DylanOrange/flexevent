@@ -26,6 +26,7 @@ from data.dsec_utils.dsec_det.io import yaml_file_to_dict
 from data.utils.types import DataType
 from models.detection.yolox.postprocess import postprocess
 from modules.utils.fetch import fetch_model_module
+from utils.initialization import load_weights
 
 cuda.matmul.allow_tf32 = True
 cudnn.allow_tf32 = True
@@ -41,10 +42,6 @@ CLASS_COLORS = (
     (255, 0, 128),
     (128, 255, 0),
 )
-
-
-def _load_weights(module, checkpoint: Path) -> None:
-    module.load_state_dict(torch.load(str(checkpoint), map_location="cpu"))
 
 
 def _event_image(event_repr: torch.Tensor) -> np.ndarray:
@@ -207,9 +204,7 @@ def _build_sequence(config: DictConfig, sequence: str) -> DSEC:
         min_bbox_diag=float(config.dataset.min_bbox_diag),
         min_bbox_height=float(config.dataset.min_bbox_height),
         num_us=float(config.dataset.num_us),
-        dual_frequency=bool(dual.enable),
         high_window_ratio=float(dual.high_window_ratio),
-        high_window_crop=str(dual.inference_crop),
         high_window_seed=int(dual.inference_seed),
         class_mode=str(config.dataset.class_mode),
     )
@@ -234,7 +229,7 @@ def main(config: DictConfig) -> None:
     dataset = _build_sequence(config, sequence)
 
     module = fetch_model_module(config=config)
-    _load_weights(module, Path(config.checkpoint).expanduser())
+    load_weights(module, Path(config.checkpoint).expanduser())
     module.to(device).eval()
     model = module.mdl
     class_names = get_dsec_class_spec(
@@ -271,11 +266,8 @@ def main(config: DictConfig) -> None:
             images = sample[DataType.IMAGE]
             padded = sample[DataType.IS_PADDED_MASK]
             timestamps = sample[DataType.TIMESTAMP]
-            dual_frequency = DataType.EV_REPR_B in sample
-            events_a = sample[
-                DataType.EV_REPR_A if dual_frequency else DataType.EV_REPR
-            ]
-            events_b = sample[DataType.EV_REPR_B] if dual_frequency else None
+            events_a = sample[DataType.EV_REPR_A]
+            events_b = sample[DataType.EV_REPR_B]
 
             for time_index, is_padded in enumerate(padded):
                 if is_padded:
@@ -284,13 +276,11 @@ def main(config: DictConfig) -> None:
                 event_a = module.input_padder.pad_tensor_ev_repr(
                     event_a_cpu.unsqueeze(0).to(device=device, dtype=torch.float32)
                 )
-                event_b = None
-                if dual_frequency:
-                    event_b = module.input_padder.pad_tensor_ev_repr(
-                        events_b[time_index].unsqueeze(0).to(
-                            device=device, dtype=torch.float32
-                        )
+                event_b = module.input_padder.pad_tensor_ev_repr(
+                    events_b[time_index].unsqueeze(0).to(
+                        device=device, dtype=torch.float32
                     )
+                )
                 image = images[time_index].unsqueeze(0).to(device=device)
                 with torch.autocast(
                         device_type="cuda", dtype=torch.float16,

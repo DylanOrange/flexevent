@@ -1,0 +1,5 @@
+# @package _global_
+recipe:
+  name: 2class_global
+dataset:
+  class_mode: 2class

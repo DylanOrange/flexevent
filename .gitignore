@@ -19,4 +19,9 @@ results/
 *.csv
 *.ckpt
 checkpoints/*.pth
+pretrained/
+datasets/
 core.*
+outputs/
+pseudo_predictions/
+pseudo_labels/

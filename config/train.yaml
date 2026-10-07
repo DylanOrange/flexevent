@@ -1,0 +1,96 @@
+defaults:
+  - dataset: dsec
+  - model: rnndet
+  - _self_
+  - recipe: 2class_global
+
+seed: 42
+precision: 16
+output_dir: outputs/${recipe.name}
+resume: null
+
+hardware:
+  gpus: 0
+  num_workers:
+    train: 6
+    eval: 4
+batch_size:
+  train: 8
+  eval: 1
+
+training:
+  event_weights: pretrained/rvt-b.ckpt
+  rgb_weights: pretrained/R-50.pkl
+  teacher_checkpoint: null
+  max_steps: 50000
+  learning_rate: 0.0002
+  weight_decay: 0.001
+  gradient_clip_val: 1.0
+  limit_train_batches: 1.0
+  lr_scheduler:
+    use: true
+    total_steps: 50000
+    pct_start: 0.01
+    div_factor: 25
+    final_div_factor: 10000
+  fusion_loss_weight: 10.0
+  # Used only with dataset.train.supervision=pseudo (FlexTune Student).
+  pseudo_loss:
+    box_weight: 0.15       # scales pseudo positives (times teacher confidence)
+    negative_weight: 0.1   # extra scale on the background of pseudo-labelled frames
+    loss_weight: 0.65      # weight of the pseudo-label term, normalised separately from GT
+
+dataset:
+  train:
+    sequences: null
+    # gt: full intervals between annotated frames (Global)
+    # sparse_gt: [midpoint, annotated frame] intervals (FlexTune Teacher)
+    # pseudo: GT and pseudo-labelled 2x-grid intervals (FlexTune Student)
+    supervision: gt
+    pseudo_labels_root: null
+    mixed:
+      w_stream: 1
+      w_random: 1
+  eval:
+    fit_split: val
+    interframe: false
+  data_augmentation:
+    random:
+      prob_hflip: 0.5
+      rotate:
+        prob: 0
+        min_angle_deg: 2
+        max_angle_deg: 6
+      zoom:
+        prob: 0.8
+        zoom_in:
+          weight: 8
+          factor: {min: 1, max: 1.5}
+        zoom_out:
+          weight: 2
+          factor: {min: 1, max: 1.2}
+    stream:
+      prob_hflip: 0.5
+      rotate:
+        prob: 0
+        min_angle_deg: 2
+        max_angle_deg: 6
+      zoom:
+        prob: 0.5
+        zoom_out:
+          factor: {min: 1, max: 1.2}
+
+validation:
+  every_n_steps: 1000
+  limit_val_batches: 1.0
+checkpointing:
+  save_top_k: 5
+wandb:
+  enable: false
+  project: FlexEvent
+
+hydra:
+  run:
+    dir: ${output_dir}
+  job:
+    chdir: false

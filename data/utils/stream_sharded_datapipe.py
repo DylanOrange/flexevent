@@ -2,7 +2,6 @@ from typing import Any, List, Optional
 
 import torch
 import torch.distributed as dist
-from torch.utils.data import DataLoader
 from torchdata.datapipes.iter import Concater, IterableWrapper, IterDataPipe, ZipperLongest
 from torchdata.datapipes.map import MapDataPipe
 

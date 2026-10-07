@@ -73,6 +73,20 @@ class DSECEvaluator:
     def has_data(self) -> bool:
         return bool(self.labels)
 
+    def evaluate_distributed(self, img_height: int, img_width: int):
+        import torch.distributed as dist
+        if not dist.is_available() or not dist.is_initialized():
+            return self.evaluate_buffer(img_height, img_width)
+        shards = [None] * dist.get_world_size()
+        dist.all_gather_object(shards, (self.labels, self.predictions))
+        metrics = [None]
+        if dist.get_rank() == 0:
+            self.labels = [frame for labels, _ in shards for frame in labels]
+            self.predictions = [frame for _, predictions in shards for frame in predictions]
+            metrics[0] = self.evaluate_buffer(img_height, img_width)
+        dist.broadcast_object_list(metrics, src=0)
+        return metrics[0]
+
     def evaluate_buffer(self, img_height: int, img_width: int) -> Dict[str, float]:
         assert len(self.labels) == len(self.predictions)
         minimum_diagonal = 15 if self.downsample_by_2 else 30

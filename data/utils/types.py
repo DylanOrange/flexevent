@@ -5,7 +5,6 @@ import torch
 
 
 class DataType(Enum):
-    EV_REPR = auto()
     EV_REPR_A = auto()
     EV_REPR_B = auto()
     EV_WINDOW_A = auto()
@@ -17,11 +16,14 @@ class DataType(Enum):
     TIMESTAMP = auto()
     SEQUENCE_NAME = auto()
     NMS = auto()
+    IS_PSEUDO_FRAME_SEQ = auto()
+    TOKEN_MASK = auto()
 
 
 class DatasetSamplingMode(str, Enum):
     RANDOM = "random"
     STREAM = "stream"
+    MIXED = "mixed"
 
 
 class ObjDetOutput(Enum):
@@ -34,3 +36,5 @@ LstmState = Optional[Tuple[torch.Tensor, torch.Tensor]]
 LstmStates = List[LstmState]
 FeatureMap = torch.Tensor
 BackboneFeatures = Dict[int, torch.Tensor]
+
+LoaderDataDictGenX = Dict[DataType, object]

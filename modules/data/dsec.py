@@ -32,20 +32,13 @@ class DSECDataModule(pl.LightningDataModule):
         self.split_config = yaml_file_to_dict(split_file)
 
         dual = config.flexfuse.dual_frequency
-        self.dual_frequency = bool(dual.enable)
         self.high_window_ratio = float(dual.high_window_ratio)
-        self.high_window_crop = str(dual.inference_crop)
         self.high_window_seed = int(dual.inference_seed)
-        if self.high_window_crop not in {"trailing", "deterministic_random"}:
-            raise ValueError(
-                "high_window_crop must be 'trailing' or "
-                "'deterministic_random'"
-            )
 
         self.validation_dataset = None
         self.test_dataset = None
 
-    def _build_dataset(self, split: str):
+    def _build_dataset(self, split: str, num_us=None):
         base = DSECDet(
             root=self.root,
             split=split,
@@ -53,7 +46,6 @@ class DSECDataModule(pl.LightningDataModule):
             split_config=self.split_config,
         )
         datapipes = []
-        stream_length = 0
         for sequence in tqdm(
             self.split_config[split],
             desc=f"creating streaming {split} datasets",
@@ -64,16 +56,12 @@ class DSECDataModule(pl.LightningDataModule):
                 sequence_length=self.sequence_length,
                 min_bbox_diag=self.min_bbox_diag,
                 min_bbox_height=self.min_bbox_height,
-                num_us=self.num_us,
-                dual_frequency=self.dual_frequency,
+                num_us=self.num_us if num_us is None else num_us,
                 high_window_ratio=self.high_window_ratio,
-                high_window_crop=self.high_window_crop,
                 high_window_seed=self.high_window_seed,
                 class_mode=self.class_mode,
             )
             datapipes.append(datapipe)
-            stream_length += len(datapipe)
-        print(f"DSEC {split}: {stream_length} streaming samples")
         return build_streaming_evaluation_dataset(
             datapipes=datapipes,
             batch_size=self.batch_size_eval,

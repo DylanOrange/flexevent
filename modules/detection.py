@@ -9,12 +9,13 @@ from data.dsec_utils.class_config import get_dsec_class_spec
 from data.utils.types import DataType, DatasetSamplingMode
 from models.detection.yolox.postprocess import postprocess
 from models.detection.yolox_extension.models.detector import YoloXDetector
+from modules.training import TrainingMixin
 from modules.utils.detection import BackboneFeatureSelector, Mode, RNNStates, mode_2_string
 from utils.evaluation.dsec import DSECEvaluator, to_prophesee
 from utils.padding import InputPadderFromShape
 
 
-class Module(pl.LightningModule):
+class Module(TrainingMixin, pl.LightningModule):
 
     def __init__(self, full_config: DictConfig):
         super().__init__()
@@ -23,11 +24,10 @@ class Module(pl.LightningModule):
         self.input_padder = InputPadderFromShape(
             desired_hw=tuple(self.mdl_config.rvt_block.in_res_hw))
         self.mdl = YoloXDetector(self.mdl_config)
-        self.mode_2_rnn_states = {Mode.TEST: RNNStates()}
+        self.mode_2_rnn_states = {mode: RNNStates() for mode in Mode}
 
     def setup(self, stage: Optional[str] = None) -> None:
-        class_spec = get_dsec_class_spec(
-            self.full_config.dataset.get("class_mode", "legacy_3"))
+        class_spec = get_dsec_class_spec(self.full_config.dataset.class_mode)
         self.mode_2_psee_evaluator = {
             Mode.TEST: DSECEvaluator(
                 downsample_by_2=self.full_config.dataset.downsample_by_factor_2,
@@ -43,6 +43,21 @@ class Module(pl.LightningModule):
         self.mode_2_hw = {Mode.TEST: None}
         self.mode_2_batch_size = {Mode.TEST: None}
         self.mode_2_rnn_states[Mode.TEST] = RNNStates()
+        if stage == 'fit':
+            self.train_config = self.full_config.training
+            self.mode_2_sampling_mode[Mode.TRAIN] = DatasetSamplingMode.MIXED
+            self.mode_2_sampling_mode[Mode.VAL] = DatasetSamplingMode.STREAM
+            for mode in (Mode.TRAIN, Mode.VAL, Mode.VAL_HIGH):
+                self.mode_2_hw[mode] = None
+                self.mode_2_batch_size[mode] = None
+                self.mode_2_rnn_states[mode] = RNNStates()
+            self.mode_2_psee_evaluator[Mode.VAL] = DSECEvaluator(
+                downsample_by_2=self.full_config.dataset.downsample_by_factor_2,
+                classes=class_spec.eval_class_names, class_id_mapping=class_spec.model_to_eval_id)
+            self.mode_2_sampling_mode[Mode.VAL_HIGH] = DatasetSamplingMode.STREAM
+            self.mode_2_psee_evaluator[Mode.VAL_HIGH] = DSECEvaluator(
+                downsample_by_2=self.full_config.dataset.downsample_by_factor_2,
+                classes=class_spec.eval_class_names, class_id_mapping=class_spec.model_to_eval_id)
 
     @staticmethod
     def get_worker_id_from_batch(batch: Any) -> int:
@@ -56,10 +71,8 @@ class Module(pl.LightningModule):
         data = self.get_data_from_batch(batch)
         worker_id = self.get_worker_id_from_batch(batch)
 
-        dual_frequency = DataType.EV_REPR_B in data
-        ev_tensor_sequence = (
-            data[DataType.EV_REPR_A] if dual_frequency else data[DataType.EV_REPR])
-        ev_tensor_b_sequence = data[DataType.EV_REPR_B] if dual_frequency else None
+        ev_tensor_sequence = data[DataType.EV_REPR_A]
+        ev_tensor_b_sequence = data[DataType.EV_REPR_B]
         sparse_obj_labels = data[DataType.OBJLABELS_SEQ]
         is_first_sample = data[DataType.IS_FIRST_SAMPLE]
         image_tensor_sequence = data[DataType.IMAGE]
@@ -86,11 +99,8 @@ class Module(pl.LightningModule):
             )
             event_tensor = self.input_padder.pad_tensor_ev_repr(
                 ev_tensor_sequence[time_index].to(dtype=self.dtype))
-            event_tensor_b = None
-            if dual_frequency:
-                event_tensor_b = self.input_padder.pad_tensor_ev_repr(
-                    ev_tensor_b_sequence[time_index].to(dtype=self.dtype))
-                assert event_tensor.shape == event_tensor_b.shape
+            event_tensor_b = self.input_padder.pad_tensor_ev_repr(
+                ev_tensor_b_sequence[time_index].to(dtype=self.dtype))
 
             if self.mode_2_hw[mode] is None:
                 self.mode_2_hw[mode] = tuple(event_tensor.shape[-2:])
@@ -132,6 +142,26 @@ class Module(pl.LightningModule):
 
         return None
 
+    def validation_step(self, batch: Any, batch_idx: int, dataloader_idx=0):
+        return self._val_test_step_impl(batch, Mode.VAL if dataloader_idx == 0 else Mode.VAL_HIGH)
+
+    def on_validation_epoch_start(self):
+        for mode in (Mode.VAL, Mode.VAL_HIGH):
+            self.mode_2_rnn_states[mode] = RNNStates()
+            self.mode_2_psee_evaluator[mode].reset_buffer()
+
+    def on_validation_epoch_end(self):
+        aps = []
+        modes = (Mode.VAL, Mode.VAL_HIGH) if self.full_config.dataset.eval.interframe else (Mode.VAL,)
+        for mode in modes:
+            evaluator = self.mode_2_psee_evaluator[mode]
+            height, width = self.mode_2_hw[mode]
+            metrics = evaluator.evaluate_distributed(img_height=height, img_width=width)
+            self._log_evaluator_metrics(mode, metrics)
+            aps.append(metrics['AP'])
+            evaluator.reset_buffer()
+        self.log('val/score', sum(aps) / len(aps), sync_dist=True, add_dataloader_idx=False)
+
     def test_step(self, batch: Any, batch_idx: int) -> Optional[STEP_OUTPUT]:
         return self._val_test_step_impl(batch=batch, mode=Mode.TEST)
 
@@ -158,4 +188,5 @@ class Module(pl.LightningModule):
             on_epoch=True,
             batch_size=self.mode_2_batch_size[mode],
             sync_dist=True,
+            add_dataloader_idx=False,
         )

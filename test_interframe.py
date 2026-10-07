@@ -21,15 +21,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.modifier import dynamically_modify_inference_config
 from modules.utils.fetch import fetch_data_module, fetch_model_module
+from utils.initialization import load_weights
 
 cuda.matmul.allow_tf32 = True
 cudnn.allow_tf32 = True
 torch.multiprocessing.set_sharing_strategy("file_system")
-
-def _load_weights(module: pl.LightningModule, checkpoint: Path) -> None:
-    state_dict = torch.load(str(checkpoint), map_location="cpu")
-    module.load_state_dict(state_dict)
-
 
 @hydra.main(config_path="config", config_name="val", version_base="1.2")
 def main(config: DictConfig) -> None:
@@ -42,7 +38,7 @@ def main(config: DictConfig) -> None:
     assert isinstance(gpu, int), "hardware.gpus must be one GPU index"
 
     module = fetch_model_module(config=config)
-    _load_weights(module=module, checkpoint=Path(config.checkpoint))
+    load_weights(module, config.checkpoint)
 
     trainer = pl.Trainer(
         accelerator="gpu",

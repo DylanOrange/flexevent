@@ -1,17 +1,21 @@
 from enum import Enum, auto
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch as th
 
-from data.utils.types import BackboneFeatures, LstmStates
+from data.genx_utils.labels import SparselyBatchedObjectLabels
+from data.utils.types import BackboneFeatures, DatasetSamplingMode, LstmStates
 
 
 class Mode(Enum):
+    TRAIN = auto()
+    VAL = auto()
+    VAL_HIGH = auto()
     TEST = auto()
 
 
-mode_2_string = {Mode.TEST: "test"}
+mode_2_string = {Mode.TRAIN: "train", Mode.VAL: "val", Mode.VAL_HIGH: "val180", Mode.TEST: "test"}
 
 
 class BackboneFeatureSelector:
@@ -86,3 +90,38 @@ class RNNStates:
         if worker_id in self.states:
             self.states[worker_id] = self.recursive_reset(
                 self.states[worker_id], indices_or_bool_tensor)
+
+
+def mixed_collate_fn(x1: Union[th.Tensor, List[th.Tensor]], x2: Union[th.Tensor, List[th.Tensor]]):
+    if isinstance(x1, th.Tensor):
+        assert isinstance(x2, th.Tensor)
+        return th.cat((x1, x2))
+    if isinstance(x1, SparselyBatchedObjectLabels):
+        assert isinstance(x2, SparselyBatchedObjectLabels)
+        return x1 + x2
+    if isinstance(x1, list):
+        assert isinstance(x2, list)
+        assert len(x1) == len(x2)
+        return [mixed_collate_fn(x1=el_1, x2=el_2) for el_1, el_2 in zip(x1, x2)]
+    if isinstance(x1, tuple):
+        assert isinstance(x2, tuple)
+        assert len(x1) == len(x2)
+        return tuple(mixed_collate_fn(x1=el_1, x2=el_2) for el_1, el_2 in zip(x1, x2))
+    if isinstance(x1, str):
+        assert isinstance(x2, str)
+        return x1, x2
+    raise NotImplementedError
+
+
+def merge_mixed_batches(batch: Dict[str, Any]):
+    """Concatenate the streaming and the random batch of mixed sampling."""
+    if 'data' in batch:
+        return batch
+    rnd_data = batch[DatasetSamplingMode.RANDOM]['data']
+    stream_batch = batch[DatasetSamplingMode.STREAM]
+    stream_data = stream_batch['data']
+    assert rnd_data.keys() == stream_data.keys(), (rnd_data.keys(), stream_data.keys())
+    return {
+        'worker_id': stream_batch['worker_id'],
+        'data': {key: mixed_collate_fn(stream_data[key], rnd_data[key]) for key in rnd_data},
+    }

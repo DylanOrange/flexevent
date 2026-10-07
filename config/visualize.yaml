@@ -1,5 +1,5 @@
 defaults:
-  - dataset: ???
+  - dataset: dsec
   - model: rnndet
   - _self_
 
